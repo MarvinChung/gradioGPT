@@ -1,10 +1,13 @@
 import logging
 from pathlib import Path
 from typing import List, Optional, Tuple
+import os
 
-from dotenv import load_dotenv
+os.environ["OPENAI_API_BASE"]= "http://35.189.163.143:8080/v1"
+os.environ["OPENAI_API_KEY"]= "Empty"
+# from dotenv import load_dotenv
 
-load_dotenv()
+# load_dotenv()
 
 from queue import Empty, Queue
 from threading import Thread
@@ -17,7 +20,7 @@ from langchain.schema import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from callback import QueueCallback
 
-MODELS_NAMES = ["gpt-3.5-turbo", "gpt-4"]
+MODELS_NAMES = ["redpajama-incite-7b-zh", "redpajama-incite-7b-base"]
 DEFAULT_TEMPERATURE = 0.7
 
 ChatHistory = List[str]
@@ -46,6 +49,8 @@ def message_handler(
             temperature=DEFAULT_TEMPERATURE,
             streaming=True,
             callbacks=([QueueCallback(queue)]),
+            frequency_penalty=1.3,
+            max_tokens=32
         )
     else:
         # hacky way to get the queue back
@@ -55,7 +60,9 @@ def message_handler(
 
     logging.info("asking question to GPT")
     # let's add the messages to our stuff
+    print("message:", message)
     messages.append(HumanMessage(content=message))
+    print(messages)
     chatbot_messages.append((message, ""))
     # this is a little wrapper we need cuz we have to add the job_done
     def task():
@@ -67,14 +74,15 @@ def message_handler(
     t.start()
     # this will hold the content as we generate
     content = ""
-    # now, we read the next_token from queue and do what it has to be done
+    # # now, we read the next_token from queue and do what it has to be done
     while True:
         try:
-            next_token = queue.get(True, timeout=1)
+            next_token = queue.get(True, timeout=50000)
             if next_token is job_done:
                 break
             content += next_token
             chatbot_messages[-1] = (message, content)
+            # print("chatbot_messages:", chatbot_messages)
             yield chat, "", chatbot_messages, messages
         except Empty:
             continue
@@ -89,13 +97,16 @@ def on_clear_click() -> Tuple[str, List, List]:
     return "", [], []
 
 
-def on_apply_settings_click(model_name: str, temperature: float):
+def on_apply_settings_click(model_name: str, temperature: float, top_p: float, frequency_penalty: float, max_tokens: int):
     logging.info(
-        f"Applying settings: model_name={model_name}, temperature={temperature}"
+        f"Applying settings: model_name={model_name}, temperature={temperature}, top_p={top_p}, frequency_penalty={frequency_penalty}, max_tokens={max_tokens}"
     )
     chat = ChatOpenAI(
         model_name=model_name,
         temperature=temperature,
+        top_p=top_p,
+        frequency_penalty=frequency_penalty,
+        max_tokens=max_tokens,
         streaming=True,
         callbacks=[QueueCallback(Queue())],
     )
@@ -142,7 +153,7 @@ with gr.Blocks(
                     [message, chatbot, messages],
                     queue=False,
                 )
-            with gr.Accordion("Settings", open=False):
+            with gr.Accordion("Settings", open=True):
                 model_name = gr.Dropdown(
                     choices=MODELS_NAMES, value=MODELS_NAMES[0], label="model"
                 )
@@ -154,10 +165,38 @@ with gr.Blocks(
                     label="temperature",
                     interactive=True,
                 )
+
+                top_p = gr.Slider(
+                    minimum=0.0,
+                    maximum=1.0,
+                    value=0.0,
+                    step=0.1,
+                    label="top_p",
+                    interactive=True,
+                )
+
+                frequency_penalty = gr.Slider(
+                    minimum=0.0,
+                    maximum=2.0,
+                    value=0.7,
+                    step=0.1,
+                    label="frequency_penalty",
+                    interactive=True,
+                )
+
+                max_tokens = gr.Slider(
+                    minimum=1,
+                    maximum=256,
+                    value=128,
+                    step=1,
+                    label="max_tokens",
+                    interactive=True,
+                )
+
                 apply_settings = gr.Button("Apply")
                 apply_settings.click(
                     on_apply_settings_click,
-                    [model_name, temperature],
+                    [model_name, temperature, top_p, frequency_penalty, max_tokens],
                     [chat, message, chatbot, messages],
                 )
 
